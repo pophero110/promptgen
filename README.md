@@ -1,6 +1,3 @@
-Here's the `README.md` in markdown format for your Go prompt generation tool:
-
-````markdown
 # promptgen
 
 A simple, expressive, and predictable command-line tool to manage and generate prompts from templates.
@@ -124,9 +121,5 @@ MIT License
 ---
 
 Feel free to contribute or report issues!
-
-```
-
 If you want me to save this as a file or add any extra badges or sections, just say!
-```
 
