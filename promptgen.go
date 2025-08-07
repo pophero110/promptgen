@@ -42,6 +42,8 @@ func main() {
 		updateTemplate()
 	case "generate":
 		generatePrompt()
+	case "review":
+		reviewTemplate()
 	default:
 		usage()
 		os.Exit(1)
@@ -289,4 +291,21 @@ func openEditorForInput() (string, error) {
 	}
 
 	return string(content), nil
+}
+
+func reviewTemplate() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: promptgen review NAME")
+		return
+	}
+	name := os.Args[2]
+
+	tpl, err := loadTemplate(name)
+	if err != nil {
+		fmt.Printf("Template %q not found.\n", name)
+		return
+	}
+
+	fmt.Printf("Template %q content:\n\n", name)
+	fmt.Println(tpl.Template)
 }
