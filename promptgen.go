@@ -44,6 +44,8 @@ func main() {
 		generatePrompt()
 	case "review":
 		reviewTemplate()
+	case "completion":
+		completion()
 	default:
 		usage()
 		os.Exit(1)
@@ -54,11 +56,14 @@ func usage() {
 	fmt.Println(`Usage: promptgen <command> [args]
 
 Commands:
-  add           Add a new prompt template
-  list          List all prompt templates
-  delete NAME   Delete a prompt template by name
-  update NAME   Update a prompt template by name
-  generate NAME [TEXT_INPUT]   Generate prompt from template; if TEXT_INPUT omitted, opens editor
+  add NAME                 Add a new prompt template
+  list                     List all prompt templates
+  delete NAME              Delete a prompt template by name
+  update NAME              Update a prompt template by name (shows current content)
+  review NAME              Show the content of a prompt template
+  generate NAME [TEXT_INPUT | --clip]  
+                           Generate prompt from template; if TEXT_INPUT omitted, opens editor, or use --clip for clipboard input
+  completion SHELL         Output shell completion script (bash or zsh)
 `)
 }
 
@@ -308,4 +313,79 @@ func reviewTemplate() {
 
 	fmt.Printf("Template %q content:\n\n", name)
 	fmt.Println(tpl.Template)
+}
+
+func completion() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: promptgen completion SHELL")
+		fmt.Println("Supported shells: bash, zsh")
+		return
+	}
+
+	shell := os.Args[2]
+
+	switch shell {
+	case "bash":
+		fmt.Println(bashCompletionScript())
+	case "zsh":
+		fmt.Println(zshCompletionScript())
+	default:
+		fmt.Println("Unsupported shell:", shell)
+	}
+}
+
+func bashCompletionScript() string {
+	return `# bash completion for promptgen
+
+_promptgen_completions() {
+	local cur prev cmds templates
+	COMPREPLY=()
+	cur="${COMP_WORDS[COMP_CWORD]}"
+	prev="${COMP_WORDS[COMP_CWORD-1]}"
+	cmds="list create update delete generate review search completion"
+
+	# load templates from your data directory
+	templates="$(promptgen list | tail -n +2)"
+
+	if [[ $COMP_CWORD == 1 ]]; then
+		COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
+		return 0
+	fi
+
+	case "${COMP_WORDS[1]}" in
+		generate|update|delete|review|search)
+			COMPREPLY=( $(compgen -W "$templates" -- "$cur") )
+			return 0
+			;;
+		completion)
+			COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") )
+			return 0
+			;;
+	esac
+}
+
+complete -F _promptgen_completions promptgen
+`
+}
+
+func zshCompletionScript() string {
+	return `#compdef promptgen
+
+_arguments \
+  '1:command:(list create update delete generate review search completion)' \
+  '2:template:->templates' \
+  '3:arg:->args'
+
+_templates() {
+  reply=(${(f)"$(promptgen list | tail -n +2)"})
+}
+
+case $state in
+  templates)
+    _templates
+    ;;
+  args)
+    ;;
+esac
+`
 }
