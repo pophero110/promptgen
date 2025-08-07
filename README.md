@@ -2,6 +2,37 @@
 
 A simple, expressive, and predictable command-line tool to manage and generate prompts from templates.
 
+## Additional Useful Features to Consider
+
+- Template preview: Preview a template’s content without generating to confirm before use.
+
+- Search templates: Quickly find templates by name or keyword.
+
+- Template variables: Support multiple placeholders (e.g. <input>, <context>) with flexible input mapping.
+
+- Configurable editor: Allow users to specify their preferred editor via environment variable or config.
+
+- Template import/export: Export templates to share with others or import shared templates.
+
+- History/log: Keep a history of generated prompts for easy reference and reuse.
+
+- JSON/YAML input support: Allow structured input for complex templates.
+
+- Interactive mode: Guided prompt generation with step-by-step questions.
+
+- Auto-update templates: Pull template updates from a remote repo or URL.
+
+- Syntax validation: Check template syntax before saving or generating.
+
+- Multi-language support: Localize UI messages and error prompts.
+
+- Template versioning: Keep versions of templates and revert if needed.
+
+- Custom output formats: Save generated prompts directly to files, or export as markdown, JSON, etc.
+
+- Integration with other tools: For example, integrate with GPT APIs to generate completions directly.
+
+Shell completions: Support bash/zsh/fish auto-completion for commands and template names.
 ---
 
 ## Installation
