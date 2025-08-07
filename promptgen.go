@@ -46,6 +46,8 @@ func main() {
 		reviewTemplate()
 	case "completion":
 		completion()
+	case "history":
+		showHistory()
 	default:
 		usage()
 		os.Exit(1)
@@ -60,9 +62,10 @@ Commands:
   list                     List all prompt templates
   delete NAME              Delete a prompt template by name
   update NAME              Update a prompt template by name (shows current content)
-  review NAME              Show the content of a prompt template
   generate NAME [TEXT_INPUT | --clip]  
                            Generate prompt from template; if TEXT_INPUT omitted, opens editor, or use --clip for clipboard input
+  review NAME              Show the content of a prompt template
+  history                  Show previously generated prompts
   completion SHELL         Output shell completion script (bash or zsh)
 `)
 }
@@ -77,6 +80,11 @@ func ensureTemplateDir() error {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, templateDir)
 	return os.MkdirAll(dir, os.ModePerm)
+}
+
+func getHistoryPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, templateDir, "history.log")
 }
 
 // CRUD
@@ -257,6 +265,20 @@ func generatePrompt() {
 	} else {
 		fmt.Println("\nPrompt copied to clipboard!")
 	}
+
+	// Append to history file
+	historyPath := getHistoryPath()
+	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("Warning: failed to write history:", err)
+		return
+	}
+	defer f.Close()
+
+	entry := fmt.Sprintf("Template: %s\nInput:\n%s\nGenerated Prompt:\n%s\n---\n", name, input, promptStr)
+	if _, err := f.WriteString(entry); err != nil {
+		fmt.Println("Warning: failed to write history:", err)
+	}
 }
 
 func loadTemplate(name string) (PromptTemplate, error) {
@@ -342,7 +364,7 @@ _promptgen_completions() {
 	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"
 	prev="${COMP_WORDS[COMP_CWORD-1]}"
-	cmds="list create update delete generate review search completion"
+	cmds="list create update delete generate review search completion history"
 
 	# load templates from your data directory
 	templates="$(promptgen list | tail -n +2)"
@@ -372,7 +394,7 @@ func zshCompletionScript() string {
 	return `#compdef promptgen
 
 _arguments \
-  '1:command:(list create update delete generate review search completion)' \
+  '1:command:(list create update delete generate review search completion history)' \
   '2:template:->templates' \
   '3:arg:->args'
 
@@ -388,4 +410,20 @@ case $state in
     ;;
 esac
 `
+}
+
+func showHistory() {
+	historyPath := getHistoryPath()
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No history found.")
+		} else {
+			fmt.Println("Error reading history:", err)
+		}
+		return
+	}
+
+	fmt.Println("Prompt Generation History:\n")
+	fmt.Println(string(data))
 }
