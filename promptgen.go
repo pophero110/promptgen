@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -20,6 +21,7 @@ const templateDir = ".promptgen/templates"
 
 type PromptTemplate struct {
 	Name     string `json:"name"`
+	Version  int    `json:"version"`
 	Template string `json:"template"`
 }
 
@@ -48,6 +50,10 @@ func main() {
 		completion()
 	case "history":
 		showHistory()
+	case "versions":
+		listVersions()
+	case "view":
+		viewVersion()
 	default:
 		usage()
 		os.Exit(1)
@@ -59,21 +65,30 @@ func usage() {
 
 Commands:
   add NAME                 Add a new prompt template
-  list                     List all prompt templates
-  delete NAME              Delete a prompt template by name
-  update NAME              Update a prompt template by name (shows current content)
-  generate NAME [TEXT_INPUT | --clip]  
+  list                     List all prompt templates with versions
+  delete NAME              Delete a prompt template and all versions
+  update NAME              Update a prompt template by name (increments version)
+  generate NAME [TEXT_INPUT | --clip]
                            Generate prompt from template; if TEXT_INPUT omitted, opens editor, or use --clip for clipboard input
-  review NAME              Show the content of a prompt template
-  history                  Show previously generated prompts
+  review NAME              Show latest version content of a prompt template
+  versions NAME            List all versions of a template
+  view NAME VERSION        View a specific version of a template
   completion SHELL         Output shell completion script (bash or zsh)
+  history                  Show prompt generation history
 `)
 }
 
 // Helpers
+
 func getTemplatePath(name string) string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, templateDir, name+".json")
+}
+
+func getTemplateVersionPath(name string, version int) string {
+	home, _ := os.UserHomeDir()
+	filename := fmt.Sprintf("%s_v%d.json", name, version)
+	return filepath.Join(home, templateDir, filename)
 }
 
 func ensureTemplateDir() error {
@@ -82,9 +97,24 @@ func ensureTemplateDir() error {
 	return os.MkdirAll(dir, os.ModePerm)
 }
 
-func getHistoryPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, templateDir, "history.log")
+func loadTemplate(name string) (PromptTemplate, error) {
+	var t PromptTemplate
+	data, err := os.ReadFile(getTemplatePath(name))
+	if err != nil {
+		return t, err
+	}
+	err = json.Unmarshal(data, &t)
+	return t, err
+}
+
+func loadTemplateVersion(name string, version int) (PromptTemplate, error) {
+	var t PromptTemplate
+	data, err := os.ReadFile(getTemplateVersionPath(name, version))
+	if err != nil {
+		return t, err
+	}
+	err = json.Unmarshal(data, &t)
+	return t, err
 }
 
 // CRUD
@@ -96,6 +126,12 @@ func addTemplate() {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		fmt.Println("Template name cannot be empty")
+		return
+	}
+
+	// Check if template exists already
+	if _, err := os.Stat(getTemplatePath(name)); err == nil {
+		fmt.Println("Template already exists. Use update command to modify it.")
 		return
 	}
 
@@ -113,16 +149,25 @@ func addTemplate() {
 
 	tpl := PromptTemplate{
 		Name:     name,
+		Version:  1,
 		Template: string(content),
 	}
 
 	data, _ := json.MarshalIndent(tpl, "", "  ")
-	if err := os.WriteFile(getTemplatePath(name), data, 0644); err != nil {
-		fmt.Println("Error saving template:", err)
+
+	// Save versioned file
+	versionPath := getTemplateVersionPath(name, tpl.Version)
+	if err := os.WriteFile(versionPath, data, 0644); err != nil {
+		fmt.Println("Error saving versioned template:", err)
 		return
 	}
 
-	fmt.Println("Template saved.")
+	// Save pointer to latest
+	if err := os.WriteFile(getTemplatePath(name), data, 0644); err != nil {
+		fmt.Println("Warning: failed to save main template pointer:", err)
+	}
+
+	fmt.Println("Template saved with version 1.")
 }
 
 func listTemplates() {
@@ -142,14 +187,20 @@ func listTemplates() {
 		return
 	}
 
+	fmt.Println("Templates:")
 	for _, f := range files {
+		base := filepath.Base(f)
+		// Skip versioned files (containing _v)
+		if strings.Contains(base, "_v") {
+			continue
+		}
 		data, err := os.ReadFile(f)
 		if err != nil {
 			continue
 		}
 		var t PromptTemplate
 		if err := json.Unmarshal(data, &t); err == nil {
-			fmt.Println("-", t.Name)
+			fmt.Printf(" - %s (version %d)\n", t.Name, t.Version)
 		}
 	}
 }
@@ -161,11 +212,31 @@ func deleteTemplate() {
 	}
 	name := os.Args[2]
 
-	if err := os.Remove(getTemplatePath(name)); err != nil {
-		fmt.Println("Error deleting template:", err)
+	if err := ensureTemplateDir(); err != nil {
+		fmt.Println("Error accessing templates:", err)
 		return
 	}
-	fmt.Println("Deleted template:", name)
+
+	home, _ := os.UserHomeDir()
+	pattern := filepath.Join(home, templateDir, fmt.Sprintf("%s*.json", name))
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		fmt.Println("Error listing template files:", err)
+		return
+	}
+
+	if len(files) == 0 {
+		fmt.Println("No such template found:", name)
+		return
+	}
+
+	for _, f := range files {
+		if err := os.Remove(f); err != nil {
+			fmt.Println("Error deleting file:", f, err)
+		}
+	}
+
+	fmt.Println("Deleted template and all versions:", name)
 }
 
 func updateTemplate() {
@@ -175,8 +246,9 @@ func updateTemplate() {
 	}
 	name := os.Args[2]
 
-	path := getTemplatePath(name)
-	if _, err := os.Stat(path); err != nil {
+	// Load current template to get version
+	tpl, err := loadTemplate(name)
+	if err != nil {
 		fmt.Println("Template not found:", name)
 		return
 	}
@@ -188,17 +260,28 @@ func updateTemplate() {
 		return
 	}
 
-	tpl := PromptTemplate{
-		Name:     name,
-		Template: string(content),
-	}
+	tpl.Template = string(content)
+	tpl.Version++ // increment version
 
 	data, _ := json.MarshalIndent(tpl, "", "  ")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		fmt.Println("Error updating template:", err)
+
+	if err := ensureTemplateDir(); err != nil {
+		fmt.Println("Error creating template directory:", err)
 		return
 	}
-	fmt.Println("Template updated.")
+
+	versionPath := getTemplateVersionPath(name, tpl.Version)
+	if err := os.WriteFile(versionPath, data, 0644); err != nil {
+		fmt.Println("Error saving versioned template:", err)
+		return
+	}
+
+	// Update latest pointer
+	if err := os.WriteFile(getTemplatePath(name), data, 0644); err != nil {
+		fmt.Println("Warning: failed to update main template pointer:", err)
+	}
+
+	fmt.Printf("Template %q updated to version %d.\n", name, tpl.Version)
 }
 
 func generatePrompt() {
@@ -257,7 +340,7 @@ func generatePrompt() {
 	}
 
 	promptStr := output.String()
-	fmt.Println("\nGenerated Prompt:")
+	fmt.Printf("\nGenerated Prompt (from template version %d):\n", tpl.Version)
 	fmt.Println(promptStr)
 
 	if err := clipboard.WriteAll(promptStr); err != nil {
@@ -265,59 +348,6 @@ func generatePrompt() {
 	} else {
 		fmt.Println("\nPrompt copied to clipboard!")
 	}
-
-	// Append to history file
-	historyPath := getHistoryPath()
-	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Println("Warning: failed to write history:", err)
-		return
-	}
-	defer f.Close()
-
-	entry := fmt.Sprintf("Template: %s\nInput:\n%s\nGenerated Prompt:\n%s\n---\n", name, input, promptStr)
-	if _, err := f.WriteString(entry); err != nil {
-		fmt.Println("Warning: failed to write history:", err)
-	}
-}
-
-func loadTemplate(name string) (PromptTemplate, error) {
-	var t PromptTemplate
-	data, err := os.ReadFile(getTemplatePath(name))
-	if err != nil {
-		return t, err
-	}
-	err = json.Unmarshal(data, &t)
-	return t, err
-}
-
-func openEditorForInput() (string, error) {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vim"
-	}
-
-	tmpfile, err := ioutil.TempFile("", "promptgen_input_*.txt")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(tmpfile.Name())
-
-	cmd := exec.Command(editor, tmpfile.Name())
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", err
-	}
-
-	content, err := os.ReadFile(tmpfile.Name())
-	if err != nil {
-		return "", err
-	}
-
-	return string(content), nil
 }
 
 func reviewTemplate() {
@@ -333,7 +363,7 @@ func reviewTemplate() {
 		return
 	}
 
-	fmt.Printf("Template %q content:\n\n", name)
+	fmt.Printf("Template %q (version %d) content:\n\n", name, tpl.Version)
 	fmt.Println(tpl.Template)
 }
 
@@ -364,10 +394,10 @@ _promptgen_completions() {
 	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"
 	prev="${COMP_WORDS[COMP_CWORD-1]}"
-	cmds="list create update delete generate review search completion history"
+	cmds="list add update delete generate review versions view completion history"
 
 	# load templates from your data directory
-	templates="$(promptgen list | tail -n +2)"
+	templates="$(promptgen list | tail -n +2 | awk '{print $2}')"
 
 	if [[ $COMP_CWORD == 1 ]]; then
 		COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
@@ -375,7 +405,7 @@ _promptgen_completions() {
 	fi
 
 	case "${COMP_WORDS[1]}" in
-		generate|update|delete|review|search)
+		generate|update|delete|review|versions|view)
 			COMPREPLY=( $(compgen -W "$templates" -- "$cur") )
 			return 0
 			;;
@@ -394,12 +424,12 @@ func zshCompletionScript() string {
 	return `#compdef promptgen
 
 _arguments \
-  '1:command:(list create update delete generate review search completion history)' \
+  '1:command:(list add update delete generate review versions view completion history)' \
   '2:template:->templates' \
   '3:arg:->args'
 
 _templates() {
-  reply=(${(f)"$(promptgen list | tail -n +2)"})
+  reply=(${(f)"$(promptgen list | tail -n +2 | awk '{print $2}')"})
 }
 
 case $state in
@@ -426,4 +456,92 @@ func showHistory() {
 
 	fmt.Println("Prompt Generation History:\n")
 	fmt.Println(string(data))
+}
+
+func listVersions() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: promptgen versions NAME")
+		return
+	}
+	name := os.Args[2]
+
+	home, _ := os.UserHomeDir()
+	pattern := filepath.Join(home, templateDir, fmt.Sprintf("%s_v*.json", name))
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		fmt.Println("Error listing versions:", err)
+		return
+	}
+	if len(files) == 0 {
+		fmt.Printf("No versions found for template %q\n", name)
+		return
+	}
+
+	fmt.Printf("Versions for template %q:\n", name)
+	for _, f := range files {
+		base := filepath.Base(f) // e.g. "example_v3.json"
+		verStr := strings.TrimSuffix(base, ".json")
+		verParts := strings.Split(verStr, "_v")
+		if len(verParts) != 2 {
+			continue
+		}
+		fmt.Println("Version", verParts[1])
+	}
+}
+
+func viewVersion() {
+	if len(os.Args) < 4 {
+		fmt.Println("Usage: promptgen view NAME VERSION")
+		return
+	}
+	name := os.Args[2]
+	versionStr := os.Args[3]
+	version, err := strconv.Atoi(versionStr)
+	if err != nil {
+		fmt.Println("Invalid version number:", versionStr)
+		return
+	}
+
+	tpl, err := loadTemplateVersion(name, version)
+	if err != nil {
+		fmt.Printf("Version %d of template %q not found.\n", version, name)
+		return
+	}
+
+	fmt.Printf("Template %q version %d content:\n\n%s\n", name, version, tpl.Template)
+}
+
+func openEditorForInput() (string, error) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
+	}
+
+	tmpfile, err := ioutil.TempFile("", "promptgen_input_*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpfile.Name())
+
+	cmd := exec.Command(editor, tmpfile.Name())
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err = cmd.Run()
+	if err != nil {
+		return "", err
+	}
+
+	content, err := os.ReadFile(tmpfile.Name())
+	if err != nil {
+		return "", err
+	}
+
+	return string(content), nil
+}
+
+func getHistoryPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, templateDir, "history.log")
 }
