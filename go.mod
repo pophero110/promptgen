@@ -1,4 +1,4 @@
-module promptgen
+module github.com/pophero110/promptgen
 
 go 1.24.3
 
